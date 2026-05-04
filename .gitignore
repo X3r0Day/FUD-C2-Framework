@@ -1,0 +1,13 @@
+private.md
+main_old.c
+1-bmp-sample-2.bmp
+bmputil
+output.bmp
+output.bpm
+CMakeCache.txt
+CMakeFiles/
+CMakeLists.txt
+cmake_install.cmake
+Makefile
+old/
+private.py
