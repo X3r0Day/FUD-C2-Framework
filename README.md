@@ -121,3 +121,6 @@ if (fd >= 0) {
     _sys(SYS_CLOSE, fd, 0, 0, 0, 0, 0);
 }
 ```
+
+
+Exploite writing style are inspired after seeing multiple linux maldevs :p
